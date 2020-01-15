@@ -5,19 +5,21 @@ import 'dart:math';
 import 'package:after_layout/after_layout.dart';
 import 'package:flutter/material.dart';
 import 'package:hexagonal_grid/hexagonal_grid.dart';
-import 'package:hexagonal_grid_widget/hex_grid_child.dart';
-import 'package:hexagonal_grid_widget/hex_grid_context.dart';
-import 'package:tuple/tuple.dart';
+import 'hex_grid_child.dart';
+import 'hex_grid_context.dart';
+
+typedef HexGridChild FindHexGridChild(int q, int r, int s);
 
 @immutable
-class HexGridWidget<T extends HexGridChild> extends StatefulWidget {
-  HexGridWidget(
-      {@required this.hexGridContext,
-      @required this.children,
-      this.scrollListener});
+class HexGridWidget extends StatefulWidget {
+  HexGridWidget({
+    @required this.hexGridContext,
+    @required this.children,
+    this.scrollListener
+  });
 
   final HexGridContext hexGridContext;
-  final List<T> children;
+  final FindHexGridChild children;
 
   final ValueChanged<Offset> scrollListener;
   final ValueNotifier<Offset> offsetNotifier = ValueNotifier(Offset(0, 0));
@@ -32,15 +34,12 @@ class HexGridWidget<T extends HexGridChild> extends StatefulWidget {
   }
 }
 
-// ignore: conflicting_generic_interfaces
-class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
+class _HexGridWidgetState extends State<HexGridWidget>
     with SingleTickerProviderStateMixin, AfterLayoutMixin<HexGridWidget> {
   final GlobalKey _containerKey = GlobalKey();
   bool _isAfterFirstLayout = false;
 
   HexGridContext _hexGridContext;
-  List<UIHex> _hexLayout;
-  double _hexLayoutRadius = 0.0;
 
   double xPos = 0.0;
   double yPos = 0.0;
@@ -75,7 +74,6 @@ class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
   void initState() {
     super.initState();
 
-    _hexLayout = UIHex.toSpiralHexLayout(widget.children);
     _isAfterFirstLayout = false;
 
     _controller = AnimationController(vsync: this)
@@ -105,8 +103,8 @@ class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
     // to the bounding boxes of the hex children, which are positioned by
     // top and left values, we'll have to adjust by half of the widget size to
     // get the technical origin.
-    origin = Point((containerWidth / 2) - (_hexGridContext.maxSize / 2),
-        (containerHeight / 2) - (_hexGridContext.maxSize / 2));
+    origin = Point((containerWidth / 2) - (_hexGridContext.size / 2),
+        (containerHeight / 2) - (_hexGridContext.size / 2));
 
     //Center the hex grid to origin
     offset = Offset(origin.x, origin.y);
@@ -131,36 +129,6 @@ class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
     return containerBox.size.width;
   }
 
-  ///Ensures we will always have hex widgets visible
-  Tuple2<double, double> _confineHexGridWithinContainer(
-      double newXPosition, double newYPosition) {
-    //Don't allow the right of the hex grid widget to exceed pass the left half
-    // of the container
-    if (newXPosition < origin.x - _hexLayoutRadius) {
-      newXPosition = origin.x - _hexLayoutRadius;
-    }
-
-    //Don't allow the left of the hex grid widget to exceed pass the right half
-    // of the container
-    if (newXPosition > origin.x + _hexLayoutRadius) {
-      newXPosition = origin.x + _hexLayoutRadius;
-    }
-
-    //Don't allow the bottom of the hex grid widget to exceed pass the top half
-    // of the container
-    if (newYPosition < origin.y - _hexLayoutRadius) {
-      newYPosition = origin.y - _hexLayoutRadius;
-    }
-
-    //Don't allow the top of the hex grid widget to exceed pass the bottom half
-    // of the container
-    if (newYPosition > origin.y + _hexLayoutRadius) {
-      newYPosition = origin.y + _hexLayoutRadius;
-    }
-
-    return Tuple2<double, double>(newXPosition, newYPosition);
-  }
-
   void _handleFlingAnimation() {
     if (!_enableFling ||
         _flingAnimation.value.dx.isNaN ||
@@ -170,12 +138,6 @@ class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
 
     double newXPosition = xPos + _flingAnimation.value.dx;
     double newYPosition = yPos + _flingAnimation.value.dy;
-
-    Tuple2<double, double> newPositions =
-        _confineHexGridWithinContainer(newXPosition, newYPosition);
-
-    newXPosition = newPositions.item1;
-    newYPosition = newPositions.item2;
 
     setState(() {
       xViewPos = newXPosition;
@@ -191,12 +153,6 @@ class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
 
     double newXPosition = xViewPos + (position.dx - xPos);
     double newYPosition = yViewPos + (position.dy - yPos);
-
-    Tuple2<double, double> newPositions =
-        _confineHexGridWithinContainer(newXPosition, newYPosition);
-
-    newXPosition = newPositions.item1;
-    newYPosition = newPositions.item2;
 
     setState(() {
       xViewPos = newXPosition;
@@ -252,7 +208,7 @@ class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
     } else {
       childToShow = Stack(
           children: _buildHexWidgets(
-              _hexGridContext.maxSize / _hexGridContext.densityFactor,
+              _hexGridContext.size,
               xViewPos,
               yViewPos));
     }
@@ -271,45 +227,32 @@ class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
   }
 
   List<Widget> _buildHexWidgets(
-      double hexSize, double layoutOriginX, double layoutOriginY) {
+    double hexSize,
+    double layoutOriginX,
+    double layoutOriginY) {
+
+    final layoutOrigin = Point(
+      layoutOriginX,
+      layoutOriginY
+    );
+    final spiralOrigin = Point(origin.x - layoutOriginX, origin.y - layoutOriginY);
+
     HexLayout flatLayout = HexLayout.orientFlat(
-        Point(hexSize, hexSize), Point(layoutOriginY, layoutOriginX));
-    List<Widget> hexWidgetList = [];
+      Point(hexSize, hexSize),
+      layoutOrigin);
 
     final double containerWidth = this.containerWidth;
     final double containerHeight = this.containerHeight;
+    final double largestAxis = max(containerWidth, containerHeight);
 
-    for (int i = 0; i < _hexLayout.length; i++) {
-      Positioned hexWidget = _createPositionWidgetForHex(widget.children[i],
-          _hexLayout[i], flatLayout, containerWidth, containerHeight);
+    //2.5 here is a magic number that just happens to get enough hexes to fill the screen with minimal rendering off canvas
+    final int radiusInHexes = (largestAxis / hexSize / 2.5).ceil();
 
-      if (hexWidget != null) {
-        hexWidgetList.add(hexWidget);
-      }
-    }
-
-    if (_hexLayout.isNotEmpty) {
-      final Point originHexToPixel = _hexLayout.first.hex.toPixel(flatLayout);
-
-      _hexLayoutRadius =
-          originHexToPixel.distanceTo(_hexLayout.last.hex.toPixel(flatLayout));
-
-      if (originHexToPixel.y > origin.x + _hexGridContext.maxSize / 2 ||
-          originHexToPixel.y < origin.x - _hexGridContext.maxSize / 2 ||
-          originHexToPixel.x > origin.y + _hexGridContext.maxSize / 2 ||
-          originHexToPixel.x < origin.y - _hexGridContext.maxSize / 2) {
-        hexWidgetList.add(Align(
-            alignment: Alignment.bottomCenter,
-            child: Padding(
-                padding: EdgeInsets.only(bottom: 16),
-                child: RaisedButton(
-                  child: Text("Center"),
-                  elevation: 4,
-                  textTheme: ButtonTextTheme.normal,
-                  onPressed: () => _centerHexLayout(),
-                ))));
-      }
-    }
+    final hexesToRender = hexSpiral(Hex.fromPoint(flatLayout, spiralOrigin), radiusInHexes);
+    final List<Positioned> hexWidgetList = hexesToRender.map((hex) {
+      final child = widget.children(hex.q, hex.r, hex.s);
+      return _createPositionWidgetForHex(child, hex, flatLayout, containerWidth, containerHeight);
+    }).where((h) => h != null).toList();
 
     return hexWidgetList;
   }
@@ -317,38 +260,19 @@ class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
   ///Only return a [Positioned] if the widget will be visible, otherwise return
   /// null so we don't waste CPU cycles on rendering something that's not visible
   /// NOTE: As with the rest of a Hex grid, the x and y coordinates are reflected
-  Positioned _createPositionWidgetForHex(T hexGridChild, UIHex uiHex,
-      HexLayout hexLayout, double containerWidth, double containerHeight) {
-    final Point hexToPixel = uiHex.hex.toPixel(hexLayout);
+  Positioned _createPositionWidgetForHex(
+    HexGridChild hexGridChild,
+    Hex hex,
+    HexLayout hexLayout,
+    double containerWidth,
+    double containerHeight) {
 
-    //If the right of the hex exceeds pass the left border of the container
-    if (hexToPixel.y + _hexGridContext.maxSize < 0) {
-      return null;
-    }
-
-    //If the left of the hex exceeds pass the right border of the container
-    if (hexToPixel.y - _hexGridContext.maxSize > containerWidth) {
-      return null;
-    }
-
-    //If the bottom of the hex exceeds pass the top border of the container
-    if (hexToPixel.x + _hexGridContext.maxSize < 0) {
-      return null;
-    }
-
-    //If the top of the hex exceeds pass the bottom border of the container
-    if (hexToPixel.x - _hexGridContext.maxSize > containerHeight) {
-      return null;
-    }
-
-    final Point reflectedOrigin = Point(origin.y, origin.x);
-    final double distance = hexToPixel.distanceTo(reflectedOrigin);
-    final double size = hexGridChild.getScaledSize(_hexGridContext, distance);
+    final Point hexToPixel = hex.toPixel(hexLayout);
 
     return Positioned(
-        top: hexToPixel.x,
-        left: hexToPixel.y,
-        child: hexGridChild.toHexWidget(context, _hexGridContext, size, uiHex));
+        top: hexToPixel.y,
+        left: hexToPixel.x,
+        child: hexGridChild.toHexWidget(context, _hexGridContext, hex));
   }
 
   void _centerHexLayout() {
@@ -363,4 +287,23 @@ class _HexGridWidgetState<T extends HexGridChild> extends State<HexGridWidget>
       ..value = 0.0
       ..fling(velocity: 1);
   }
+}
+
+List<Hex> hexSpiral(Hex originHex, int radiusInHexes) {
+  List<Hex> hexList = [];
+  hexList.add(originHex);
+
+  //Start at one since we already seeded the origin
+  Hex neighborHex = originHex;
+  for (int orbital = 1; orbital < radiusInHexes; orbital++) {
+    neighborHex = neighborHex.neighbor(0);
+    for (int direction = 0; direction < Hex.directions.length; direction++) {
+      for (int o = 0; o < orbital; o++) {
+        hexList.add(neighborHex);
+        neighborHex =
+          neighborHex.neighbor((direction + 2) % Hex.directions.length);
+      }
+    }
+  }
+  return hexList;
 }
